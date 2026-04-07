@@ -74,12 +74,14 @@ export default function Countdown() {
           </div>
         </div>
 
-        <div
-          className={`font-mono text-center tabular-nums ${style.color} ${style.glow} ${state === 'imminent' || state === 'breach' ? 'drift' : ''}`}
-          style={{ fontSize: 'clamp(2rem, 7vw, 4.5rem)', lineHeight: 1, letterSpacing: '0.05em' }}
-        >
-          {pad(days)}:{pad(hours)}:{pad(minutes)}:{pad(seconds)}
-        </div>
+       <div className="overflow-hidden w-full">
+           <div
+             className={`font-mono text-center tabular-nums ${style.color} ${style.glow} ${state === 'imminent' || state === 'breach' ? 'drift' : ''}`}
+             style={{ fontSize: 'clamp(1.25rem, 3.2vw, 2.75rem)', lineHeight: 1.1, letterSpacing: '0.02em', whiteSpace: 'nowrap' }}
+           >
+             {pad(days)}:{pad(hours)}:{pad(minutes)}:{pad(seconds)}
+           </div>
+         </div>
 
         <div className="mt-2 grid grid-cols-4 gap-2 text-center text-[10px] font-mono text-terminal-dim uppercase">
           <div>Days</div>
