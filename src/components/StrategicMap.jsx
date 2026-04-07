@@ -1,143 +1,157 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore } from '../store/useStore.js';
 
-// Stylised SVG of the Strait of Hormuz region.
-// Coordinates are abstract (not real lat/lng) — designed to look like a tactical display.
+// Real Strait of Hormuz coordinates
+const HORMUZ_CENTER = [26.57, 56.25];
+const CHOKEPOINT = [26.5667, 56.25];
 
-const VESSELS_INIT = [
-  { id: 1, x: 50, y: 180, vx: 0.6, type: 'tanker' },
-  { id: 2, x: 120, y: 160, vx: 0.4, type: 'tanker' },
-  { id: 3, x: 200, y: 145, vx: 0.5, type: 'tanker' },
-  { id: 4, x: 320, y: 130, vx: -0.3, type: 'cargo' },
-  { id: 5, x: 420, y: 115, vx: -0.5, type: 'tanker' },
-  { id: 6, x: 500, y: 105, vx: -0.4, type: 'tanker' },
-  { id: 7, x: 600, y: 90, vx: -0.6, type: 'cargo' },
+// Real tanker routes through the Strait (approx)
+const VESSEL_ROUTES = [
+  { id: 1, start: [26.85, 55.4], end: [25.9, 57.2], type: 'tanker', progress: 0.1, speed: 0.0008 },
+  { id: 2, start: [25.9, 57.2], end: [26.85, 55.4], type: 'tanker', progress: 0.3, speed: 0.0006 },
+  { id: 3, start: [26.75, 55.6], end: [26.0, 57.0], type: 'tanker', progress: 0.5, speed: 0.0007 },
+  { id: 4, start: [26.0, 57.0], end: [26.75, 55.6], type: 'cargo', progress: 0.2, speed: 0.0005 },
+  { id: 5, start: [26.9, 55.2], end: [25.85, 57.4], type: 'tanker', progress: 0.7, speed: 0.0009 },
+  { id: 6, start: [25.85, 57.4], end: [26.9, 55.2], type: 'cargo', progress: 0.4, speed: 0.0006 },
+  { id: 7, start: [26.8, 55.5], end: [25.95, 57.1], type: 'tanker', progress: 0.85, speed: 0.00075 },
 ];
 
+function interp(start, end, t) {
+  return [start[0] + (end[0] - start[0]) * t, start[1] + (end[1] - start[1]) * t];
+}
+
 export default function StrategicMap() {
-  const [vessels, setVessels] = useState(VESSELS_INIT);
+  const mapRef = useRef(null);
+  const mapInstance = useRef(null);
+  const vesselLayers = useRef([]);
+  const chokeLayer = useRef(null);
+  const vesselsState = useRef(VESSEL_ROUTES.map((v) => ({ ...v })));
   const escalation = useStore((s) => s.escalation);
 
+  // Initialize map once
   useEffect(() => {
-    const id = setInterval(() => {
-      setVessels((vs) =>
-        vs.map((v) => {
-          let nx = v.x + v.vx;
-          if (nx > 680) nx = 20;
-          if (nx < 20) nx = 680;
-          return { ...v, x: nx };
-        })
-      );
-    }, 120);
-    return () => clearInterval(id);
+    if (!mapRef.current || mapInstance.current) return;
+    if (typeof window === 'undefined' || !window.L) return;
+
+    const L = window.L;
+    const map = L.map(mapRef.current, {
+      center: HORMUZ_CENTER,
+      zoom: 8,
+      zoomControl: false,
+      attributionControl: false,
+      dragging: true,
+      scrollWheelZoom: false,
+    });
+
+    // Esri World Imagery — free, no key, high-res satellite
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 18 }
+    ).addTo(map);
+
+    // Dark overlay to make it feel like a tactical display
+    L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png',
+      { maxZoom: 18, opacity: 0.7 }
+    ).addTo(map);
+
+    mapInstance.current = map;
+
+    return () => {
+      map.remove();
+      mapInstance.current = null;
+    };
   }, []);
 
-  const chokeColor =
-    escalation.probability >= 75 ? '#ff3b47' : escalation.probability >= 45 ? '#ffb020' : '#00ff9d';
+  // Animate vessels + update chokepoint color
+  useEffect(() => {
+    if (!mapInstance.current || !window.L) return;
+    const L = window.L;
+    const map = mapInstance.current;
+
+    // Clear previous
+    vesselLayers.current.forEach((l) => map.removeLayer(l));
+    vesselLayers.current = [];
+    if (chokeLayer.current) map.removeLayer(chokeLayer.current);
+
+    // Chokepoint color from escalation
+    const chokeColor =
+      escalation.probability >= 75 ? '#ff3b47' : escalation.probability >= 45 ? '#ffb020' : '#00ff9d';
+
+    // Chokepoint marker
+    chokeLayer.current = L.circleMarker(CHOKEPOINT, {
+      radius: 14,
+      color: chokeColor,
+      fillColor: chokeColor,
+      fillOpacity: 0.2,
+      weight: 2,
+      className: 'choke-pulse',
+    }).addTo(map);
+    L.circleMarker(CHOKEPOINT, {
+      radius: 4,
+      color: chokeColor,
+      fillColor: chokeColor,
+      fillOpacity: 1,
+      weight: 1,
+    }).addTo(map);
+
+    const interval = setInterval(() => {
+      vesselLayers.current.forEach((l) => map.removeLayer(l));
+      vesselLayers.current = [];
+
+      vesselsState.current.forEach((v) => {
+        v.progress += v.speed * 20;
+        if (v.progress >= 1) v.progress = 0;
+
+        const pos = interp(v.start, v.end, v.progress);
+        const color = v.type === 'tanker' ? '#ffb020' : '#4fc3f7';
+
+        const marker = L.circleMarker(pos, {
+          radius: 4,
+          color,
+          fillColor: color,
+          fillOpacity: 1,
+          weight: 1,
+        }).addTo(map);
+
+        const ring = L.circleMarker(pos, {
+          radius: 8,
+          color,
+          fillOpacity: 0,
+          weight: 1,
+          opacity: 0.5,
+        }).addTo(map);
+
+        vesselLayers.current.push(marker, ring);
+      });
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [escalation.probability]);
 
   return (
     <div className="panel flex flex-col h-full">
       <div className="panel-header">
-        <span>STRATEGIC MAP // STRAIT OF HORMUZ</span>
-        <span className="text-terminal-dim">{vessels.length} TRACKS</span>
+        <span>STRATEGIC MAP // STRAIT OF HORMUZ [SATELLITE]</span>
+        <span className="text-terminal-dim">{VESSEL_ROUTES.length} TRACKS · ESRI IMAGERY</span>
       </div>
-      <div className="p-2 flex-1 relative">
-        <svg viewBox="0 0 700 260" className="w-full h-full" style={{ background: '#05070a' }}>
-          {/* grid */}
-          <defs>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#0f1823" strokeWidth="0.5" />
-            </pattern>
-            <radialGradient id="chokeGlow">
-              <stop offset="0%" stopColor={chokeColor} stopOpacity="0.6" />
-              <stop offset="100%" stopColor={chokeColor} stopOpacity="0" />
-            </radialGradient>
-          </defs>
-          <rect width="700" height="260" fill="url(#grid)" />
-
-          {/* landmasses — stylised */}
-          {/* Iran (top) */}
-          <path
-            d="M 0 0 L 700 0 L 700 60 Q 600 80 500 70 Q 420 65 380 90 Q 340 110 280 95 Q 200 80 120 95 Q 60 105 0 90 Z"
-            fill="#0a1420"
-            stroke="#1a2332"
-            strokeWidth="1"
-          />
-          {/* Arabian peninsula (bottom) */}
-          <path
-            d="M 0 260 L 700 260 L 700 210 Q 620 200 560 215 Q 500 225 440 200 Q 400 180 360 195 Q 300 215 240 200 Q 160 180 80 200 Q 30 210 0 200 Z"
-            fill="#0a1420"
-            stroke="#1a2332"
-            strokeWidth="1"
-          />
-
-          {/* labels */}
-          <text x="340" y="30" fill="#3a4a5f" fontSize="10" fontFamily="monospace" textAnchor="middle">
-            IRAN
-          </text>
-          <text x="340" y="250" fill="#3a4a5f" fontSize="10" fontFamily="monospace" textAnchor="middle">
-            UAE · OMAN
-          </text>
-
-          {/* shipping lane */}
-          <path
-            d="M 20 180 Q 180 150 340 130 T 680 90"
-            fill="none"
-            stroke="#1a3a4f"
-            strokeWidth="28"
-            strokeLinecap="round"
-            opacity="0.4"
-          />
-          <path
-            d="M 20 180 Q 180 150 340 130 T 680 90"
-            fill="none"
-            stroke="#4fc3f7"
-            strokeWidth="1"
-            strokeDasharray="4 6"
-            opacity="0.5"
-          />
-
-          {/* chokepoint indicator */}
-          <circle cx="360" cy="125" r="40" fill="url(#chokeGlow)">
-            <animate attributeName="r" values="30;45;30" dur="2s" repeatCount="indefinite" />
-          </circle>
-          <circle
-            cx="360"
-            cy="125"
-            r="8"
-            fill="none"
-            stroke={chokeColor}
-            strokeWidth="2"
-            style={{ filter: `drop-shadow(0 0 6px ${chokeColor})` }}
-          >
-            <animate attributeName="stroke-opacity" values="1;0.3;1" dur="1.2s" repeatCount="indefinite" />
-          </circle>
-          <text x="360" y="165" fill={chokeColor} fontSize="9" fontFamily="monospace" textAnchor="middle">
-            CHOKE POINT
-          </text>
-
-          {/* vessels */}
-          {vessels.map((v) => {
-            const color = v.type === 'tanker' ? '#ffb020' : '#4fc3f7';
-            return (
-              <g key={v.id}>
-                <circle cx={v.x} cy={v.y} r="3" fill={color} style={{ filter: `drop-shadow(0 0 3px ${color})` }} />
-                <circle cx={v.x} cy={v.y} r="6" fill="none" stroke={color} strokeWidth="0.5" opacity="0.4" />
-              </g>
-            );
-          })}
-
-          {/* scale bar */}
-          <line x1="600" y1="245" x2="680" y2="245" stroke="#3a4a5f" strokeWidth="1" />
-          <text x="640" y="240" fill="#3a4a5f" fontSize="8" fontFamily="monospace" textAnchor="middle">
-            ~50 NM
-          </text>
-        </svg>
+      <div className="p-2 flex-1 relative" style={{ minHeight: 340 }}>
+        <div
+          ref={mapRef}
+          className="absolute inset-2"
+          style={{ background: '#05070a', border: '1px solid #1a2332' }}
+        />
+        <div className="absolute top-3 left-3 z-[400] font-mono text-[9px] text-terminal-accent bg-black/70 px-2 py-1 border border-terminal-border">
+          26.57°N 56.25°E
+        </div>
+        <div className="absolute top-3 right-3 z-[400] font-mono text-[9px] text-terminal-amber bg-black/70 px-2 py-1 border border-terminal-border">
+          ● LIVE SAT FEED
+        </div>
       </div>
       <div className="px-3 py-2 border-t border-terminal-border text-[10px] font-mono text-terminal-dim flex justify-between">
-        <span>● TANKER</span>
-        <span>● CARGO</span>
-        <span style={{ color: chokeColor }}>● CHOKE-STATE</span>
+        <span style={{ color: '#ffb020' }}>● TANKER</span>
+        <span style={{ color: '#4fc3f7' }}>● CARGO</span>
+        <span>● CHOKE-STATE</span>
       </div>
     </div>
   );
