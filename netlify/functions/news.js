@@ -3,8 +3,9 @@
 
 const FEEDS = [
   { source: 'Al Jazeera', url: 'https://www.aljazeera.com/xml/rss/all.xml' },
-  { source: 'CNN World', url: 'http://rss.cnn.com/rss/edition_world.rss' },
-  { source: 'CNN Top', url: 'http://rss.cnn.com/rss/edition.rss' },
+  { source: 'BBC World', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+  { source: 'Reuters World', url: 'https://feeds.reuters.com/Reuters/worldNews' },
+  { source: 'Guardian World', url: 'https://www.theguardian.com/world/rss' },
 ];
 
 function stripTags(s = '') {
